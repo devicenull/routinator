@@ -29,6 +29,7 @@ use tokio_process::CommandExt;
 use crate::config::Config;
 use crate::operation::Error;
 use crate::origins::RouteOrigins;
+use crate::rrdp;
 use crate::slurm::LocalExceptions;
 
 
@@ -465,7 +466,7 @@ impl Repository {
         Ok(res)
     }
 
-    /// Processes all data for the given trust CA.
+    /// Processes all data for the given CA.
     /// 
     /// The CA cert is given through `cert`. It is located at `uri`, this
     /// is only needed for composing error messages. Any route origins found
@@ -478,8 +479,8 @@ impl Repository {
         routes: &mut RouteOrigins
     ) {
         let mut store = CrlStore::new();
-        let repo_uri = match cert.repository_uri() {
-            Some(uri) => uri,
+        let repo_uri = match cert.ca_repository_uri() {
+            Some(uri) => uri.clone(),
             None => {
                 info!("CA cert {} has no repository URI. Ignoring.", uri);
                 return
@@ -602,8 +603,7 @@ impl Repository {
     /// Reads, parses, and returns the manifest for a CA.
     ///
     /// The manifest for the CA referenced via `issuer` is determined, read,
-    /// and parsed. In particular, the first manifest that is referenced in
-    /// the certificate and that turns out to be valid is returned.
+    /// and parsed.
     ///
     /// If no manifest can be found, `None` is returned.
     ///
@@ -616,54 +616,51 @@ impl Repository {
         issuer_uri: &uri::Rsync,
         store: &mut CrlStore,
     ) -> Option<ManifestContent> {
-        for uri in issuer.manifest_uris() {
-            let uri = match uri.into_rsync_uri() {
-                Some(uri) => uri,
-                None => {
-                    continue
-                }
-            };
-            let bytes = match self.load_file(&uri, true) {
-                Some(bytes) => bytes,
-                None => {
-                    info!("{}: failed to load.", uri);
-                    continue
-                }
-            };
-            let manifest = match Manifest::decode(bytes, self.0.strict) {
-                Ok(manifest) => manifest,
-                Err(_) => {
-                    info!("{}: failed to decode", uri);
-                    continue
-                }
-            };
-            let (cert, manifest) = match manifest.validate(issuer,
-                                                           self.0.strict) {
-                Ok(manifest) => manifest,
-                Err(_) => {
-                    info!("{}: failed to validate", uri);
-                    continue
-                }
-            };
-            if manifest.is_stale() {
-                warn!("{}: stale manifest", uri);
+        let uri = match issuer.manifest_uri() {
+            Some(uri) => uri,
+            None => {
+                info!("{}: No valid manifest found. Ignoring.", issuer_uri);
+                return None
             }
-            if manifest.len() > CRL_CACHE_LIMIT {
-                debug!(
-                    "{}: Manifest with {} entries: enabling serial caching",
-                    uri,
-                    manifest.len()
-                );
-                store.enable_serial_caching();
+        };
+        let bytes = match self.load_file(&uri, true) {
+            Some(bytes) => bytes,
+            None => {
+                info!("{}: failed to load.", uri);
+                return None
             }
-            if self.check_crl(cert, issuer, store).is_err() {
-                info!("{}: certificate has been revoked", uri);
-                continue
+        };
+        let manifest = match Manifest::decode(bytes, self.0.strict) {
+            Ok(manifest) => manifest,
+            Err(_) => {
+                info!("{}: failed to decode", uri);
+                return None
             }
-            return Some(manifest)
+        };
+        let (cert, manifest) = match manifest.validate(issuer,
+                                                       self.0.strict) {
+            Ok(manifest) => manifest,
+            Err(_) => {
+                info!("{}: failed to validate", uri);
+                return None
+            }
+        };
+        if manifest.is_stale() {
+            warn!("{}: stale manifest", uri);
         }
-        info!("{}: No valid manifest found. Ignoring.", issuer_uri);
-        None
+        if manifest.len() > CRL_CACHE_LIMIT {
+            debug!(
+                "{}: Manifest with {} entries: enabling serial caching",
+                uri,
+                manifest.len()
+            );
+            store.enable_serial_caching();
+        }
+        if self.check_crl(cert, issuer, store).is_err() {
+            info!("{}: certificate has been revoked", uri);
+            return None
+        }
+        return Some(manifest)
     }
 
     /// Checks wheter a certificate is listen on its CRL.
@@ -756,6 +753,41 @@ impl Repository {
                 }
             }
         }
+    }
+}
+
+
+//------------ ObjectId ------------------------------------------------------
+
+/// All information to find an object.
+///
+/// The object ID consists of two parts: The rsync URI that uniquely
+/// identifies the object and the RRDP server in which it can be found when
+/// using RRDP. The latter is, of course, optional.
+#[derive(Clone, Debug)]
+pub struct ObjectId {
+    uri: uri::Rsync,
+    rrdp: Option<rrdp::ServerId>,
+}
+
+impl ObjectId {
+    pub fn new(
+        uri: uri::Rsync,
+        rrdp_repo: &mut rrdp::Repository,
+        rrdp_uri: Option<&uri::Https>
+    ) -> Self {
+        ObjectId {
+            uri,
+            rrdp: rrdp_uri.map(|uri| rrdp_repo.get_server_id(uri))
+        }
+    }
+
+    pub fn uri(&self) -> &uri::Rsync {
+        &self.uri
+    }
+
+    pub fn rrdp_server(&self) -> Option<rrdp::ServerId> {
+        self.rrdp
     }
 }
 

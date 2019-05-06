@@ -24,13 +24,20 @@ extern crate httparse;
 extern crate json;
 #[macro_use] extern crate log;
 extern crate num_cpus;
+extern crate rand;
+extern crate reqwest;
+extern crate ring;
 extern crate rpki;
+#[macro_use] extern crate serde;
+extern crate serde_json;
 extern crate slab;
 #[cfg(unix)] extern crate syslog;
 extern crate tempfile;
 extern crate tokio;
 extern crate tokio_process;
 extern crate toml;
+extern crate uuid;
+#[macro_use] extern crate unwrap;
 
 pub use self::config::Config;
 pub use self::operation::{Error, Operation};
@@ -42,6 +49,7 @@ pub mod operation;
 pub mod origins;
 pub mod output;
 pub mod repository;
+pub mod rrdp;
 pub mod rtr;
 pub mod slurm;
 
