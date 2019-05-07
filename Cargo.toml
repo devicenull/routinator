@@ -25,7 +25,7 @@ log             = "^0.4"
 num_cpus        = "^1.0"
 rand            = "^0.6"
 reqwest         = "^0.9.15"
-ring            = "^0.14"
+ring            = "^0.13"
 rpki            = "^0.4.0"
 serde           = { version = "^1.0", features = [ "derive" ] }
 serde_json      = "^1.0"
@@ -44,9 +44,9 @@ syslog          = "^4.0"
 [build-dependencies]
 rustc_version   = "^0.2.3"
 
-[patch.crates-io]
-bcder = { git="https://github.com/NLnetLabs/bcder.git" }
-rpki = { git="https://github.com/NLnetLabs/rpki-rs.git" }
+[features]
+default = []
+extra-debug = [ "rpki/extra-debug" ]
 
 [package.metadata.deb]
 maintainer = "The NLnet Labs RPKI Team <rpki@nlnetlabs.nl>"
@@ -67,3 +67,8 @@ assets = [
     ["doc/routinator.1", "usr/share/man/man1/routinator.1", "644"],
 ]
 maintainer-scripts = "debian"
+
+[patch.crates-io]
+bcder = { git="https://github.com/NLnetLabs/bcder.git" }
+rpki = { git="https://github.com/NLnetLabs/rpki-rs.git" }
+

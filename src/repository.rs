@@ -18,7 +18,7 @@ use futures::future;
 use futures::{Future, IntoFuture};
 use futures_cpupool::CpuPool;
 use rpki::uri;
-use rpki::cert::{Cert, ResourceCert};
+use rpki::cert::{Cert, ResourceCert, TbsCert};
 use rpki::crl::{Crl, CrlStore};
 use rpki::manifest::{Manifest, ManifestContent, ManifestHash};
 use rpki::roa::Roa;
@@ -479,8 +479,8 @@ impl Repository {
         routes: &mut RouteOrigins
     ) {
         let mut store = CrlStore::new();
-        let repo_uri = match cert.ca_repository_uri() {
-            Some(uri) => uri.clone(),
+        let repo_uri = match cert.ca_repository() {
+            Some(uri) => uri,
             None => {
                 info!("CA cert {} has no repository URI. Ignoring.", uri);
                 return
@@ -494,11 +494,7 @@ impl Repository {
             }
         };
 
-        for item in manifest.iter_uris(repo_uri) {
-            let (uri, hash) = match item {
-                Ok(item) => item,
-                Err(_) => continue,
-            };
+        for (uri, hash) in manifest.iter_uris(repo_uri) {
             self.process_object(uri, hash, &cert, &mut store, routes);
         }
     }
@@ -616,7 +612,7 @@ impl Repository {
         issuer_uri: &uri::Rsync,
         store: &mut CrlStore,
     ) -> Option<ManifestContent> {
-        let uri = match issuer.manifest_uri() {
+        let uri = match issuer.rpki_manifest() {
             Some(uri) => uri,
             None => {
                 info!("{}: No valid manifest found. Ignoring.", issuer_uri);
@@ -627,14 +623,14 @@ impl Repository {
             Some(bytes) => bytes,
             None => {
                 info!("{}: failed to load.", uri);
-                return None
+                return None;
             }
         };
         let manifest = match Manifest::decode(bytes, self.0.strict) {
             Ok(manifest) => manifest,
             Err(_) => {
                 info!("{}: failed to decode", uri);
-                return None
+                return None;
             }
         };
         let (cert, manifest) = match manifest.validate(issuer,
@@ -642,7 +638,7 @@ impl Repository {
             Ok(manifest) => manifest,
             Err(_) => {
                 info!("{}: failed to validate", uri);
-                return None
+                return None;
             }
         };
         if manifest.is_stale() {
@@ -660,63 +656,56 @@ impl Repository {
             info!("{}: certificate has been revoked", uri);
             return None
         }
-        return Some(manifest)
+        Some(manifest)
     }
 
-    /// Checks wheter a certificate is listen on its CRL.
-    fn check_crl<C: AsRef<Cert>>(
+    /// Checks wheter a certificate is listed on its CRL.
+    fn check_crl<C: AsRef<TbsCert>>(
         &self,
         cert: C,
         issuer: &ResourceCert,
         store: &mut CrlStore,
     ) -> Result<(), ValidationError> {
         let cert = cert.as_ref();
-        let uri_list = match cert.crl_distribution() {
+        let uri = match cert.crl_uri() {
             Some(some) => some,
             None => return Ok(())
         };
-        for uri in uri_list.iter() {
-            let uri = match uri.into_rsync_uri() {
-                Some(uri) => uri,
-                None => continue
-            };
 
-            // If we already have that CRL, use it.
-            if let Some(crl) = store.get(&uri) {
-                if crl.contains(&cert.serial_number()) {
-                    return Err(ValidationError)
-                }
-                else {
-                    return Ok(())
-                }
-            }
-
-            // Otherwise, try to load it, use it, and then store it.
-            let bytes = match self.load_file(&uri, true) {
-                Some(bytes) => bytes,
-                _ => continue
-            };
-            let crl = match Crl::decode(bytes) {
-                Ok(crl) => crl,
-                Err(_) => continue
-            };
-            if crl.validate(issuer.as_ref().subject_public_key_info()).is_err() {
-                continue
-            }
-            if crl.is_stale() {
-                warn!("{}: stale CRL.", uri);
-            }
-
-            let revoked = crl.contains(&cert.serial_number());
-            store.push(uri, crl);
-            if revoked {
+        // If we already have that CRL, use it.
+        if let Some(crl) = store.get(&uri) {
+            if crl.contains(cert.serial_number()) {
                 return Err(ValidationError)
             }
             else {
                 return Ok(())
             }
         }
-        Err(ValidationError)
+
+        // Otherwise, try to load it, use it, and then store it.
+        let bytes = match self.load_file(&uri, true) {
+            Some(bytes) => bytes,
+            _ => return Err(ValidationError),
+        };
+        let crl = match Crl::decode(bytes) {
+            Ok(crl) => crl,
+            Err(_) => return Err(ValidationError)
+        };
+        if crl.validate(issuer.subject_public_key_info()).is_err() {
+            return Err(ValidationError)
+        }
+        if crl.is_stale() {
+            warn!("{}: stale CRL.", uri);
+        }
+
+        let revoked = crl.contains(cert.serial_number());
+        store.push(uri.clone(), crl);
+        if revoked {
+            Err(ValidationError)
+        }
+        else {
+            Ok(())
+        }
     }
 }
 
@@ -724,7 +713,7 @@ impl Repository {
 /// # Rsyncing
 ///
 impl Repository {
-    #[allow(mutex_atomic)] // XXX Double check maybe they are right?
+    #[allow(clippy::mutex_atomic)] // XXX Double check maybe they are right?
     fn rsync_module(&self, module: &uri::RsyncModule) {
         if let Some((ref state, ref command)) = self.0.rsync {
             if state.lock().unwrap().have_seen(module) {
@@ -801,7 +790,7 @@ struct RsyncState {
     /// The first element of each list item is the module for which the
     /// process runs, the second is a conditional variable that is going
     /// to be triggered when the process finishes.
-    #[allow(type_complexity)]
+    #[allow(clippy::type_complexity)]
     running: Vec<(uri::RsyncModule, Arc<(Mutex<bool>, Condvar)>)>,
 
     /// The rsync modules we already tried in this iteration.
@@ -816,7 +805,7 @@ impl RsyncState {
         }
     }
 
-    #[allow(type_complexity, mutex_atomic)]
+    #[allow(clippy::type_complexity, clippy::mutex_atomic)]
     fn get_running(
         &mut self,
         module: &uri::RsyncModule

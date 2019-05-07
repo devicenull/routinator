@@ -4,11 +4,22 @@
 
 Breaking Changes
 
+* The minimum supported Rust version is now 1.34.0. [(#112)]
+
 New
 
 Bug Fixes
 
+* The value of the `listen-http` config option wasn’t include in the
+  output of the `config` command. Now it is. [(#109)]
+
 Dependencies
+
+* Update to rpki-rs 0.4 [(#111)]
+
+[(#109)]: https://github.com/NLnetLabs/routinator/pull/109
+[(#111)]: https://github.com/NLnetLabs/routinator/pull/111
+[(#112)]: https://github.com/NLnetLabs/routinator/pull/112
 
 
 ## 0.3.3 ‘Big Bada Boom’
